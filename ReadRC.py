@@ -10,9 +10,13 @@ redmap = np.array([[255 - i, 0, 0] for i in range(1, 256)])
 greenmap = np.array([[0, 255 - i, 0] for i in range(1, 256)])
 bluemap = np.array([[0, 0, 255 - i] for i in range(1, 256)])
 
-# Select folder
-Tk().withdraw()
-myDir = filedialog.askdirectory()
+#__________Cargar Archivo____________
+#La carpeta debe estar en el mismo sitio que este script.
+script_dir = os.path.dirname(os.path.abspath(__file__))
+# Nombre de la carpeta que quieres abrir
+folder_name = "analysis"
+# Ruta completa a esa carpeta
+myDir = os.path.join(script_dir, folder_name)
 myFiles = [f for f in os.listdir(myDir) if f.endswith('.tiff')]
 
 # Load calibration parameters
@@ -26,9 +30,9 @@ for filename in myFiles:
     pic = cv2.imread(path)
     pic_rgb = cv2.cvtColor(pic, cv2.COLOR_BGR2RGB)
 
-    plt.imshow(pic_rgb)
-    plt.title('Original image')
-    plt.show()
+    #plt.imshow(pic_rgb)
+    #plt.title('Original image')
+    #plt.show()
 
     # Crop manually (this opens an interactive crop window)
     from matplotlib.widgets import RectangleSelector
