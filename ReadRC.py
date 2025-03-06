@@ -41,16 +41,46 @@ for filename in myFiles:
     fig, ax = plt.subplots()
     ax.imshow(pic_rgb)
     coords = []
+    
 
     def onselect(eclick, erelease):
-        coords.append((int(eclick.xdata), int(eclick.ydata), int(erelease.xdata), int(erelease.ydata)))
-    rect_selector = RectangleSelector(ax, onselect)
+        global coords
+        x1, y1 = int(eclick.xdata), int(eclick.ydata)
+        x2, y2 = int(erelease.xdata), int(erelease.ydata)
+        coords = [x1, y1, x2, y2]
+        print(f'Selección: ({x1}, {y1}) --> ({x2}, {y2})')
+    #coords.append((int(eclick.xdata), int(eclick.ydata), int(erelease.xdata), int(erelease.ydata)))
+    #rect_selector = RectangleSelector(ax, onselect)
+    rect_selector = RectangleSelector(
+    ax, onselect, 
+    useblit=True,
+    button=[1],  # Botón izquierdo del mouse
+    minspanx=5, minspany=5,
+    spancoords='pixels',
+    interactive=True)    
+   
+    def on_double_click(event):
+        if event.dblclick and coords:
+            if len(coords) == 4:  # Asegurar que hay coordenadas válidas
+                x, y = int(event.xdata), int(event.ydata)
+                x1, y1, x2, y2 = coords
+                if x1 <= x <= x2 and y1 <= y <= y2:
+                    print(f"Doble clic dentro del área seleccionada en ({x}, {y}). Cerrando ventana.")
+                    plt.close()
+                else:
+                    print(f"Doble clic fuera del área seleccionada ({x}, {y}). Ignorado.")
+            else:
+                print("No hay coordenadas válidas. Selecciona un área primero.")
+
+  
+    fig.canvas.mpl_connect('button_press_event', on_double_click)
+
     plt.show()
-
-    x1, y1, x2, y2 = coords[0]
-    cut = pic_rgb[y1:y2, x1:x2]
-
-    cut_R, cut_G, cut_B = cut[:, :, 0], cut[:, :, 1], cut[:, :, 2]
+    if coords:
+        x1, y1, x2, y2 = coords
+        cut = pic_rgb[y1:y2, x1:x2]
+    cut_R, cut_G, cut_B = cut[:, :, 0], cut[:, :, 1], cut[:, :, 2] 
+    
 
     def mean2(x): return np.mean(x)
     def std2(x): return np.std(x)
@@ -71,15 +101,25 @@ for filename in myFiles:
     std_dose = np.std(dose)
 
     # Correction factor
-    s, q, p, z, r, En = 2.2717, -0.699, 1.75, 4, 2.08, 10
-    EW = ((En - s * En**q)**p - z / r)**(1/p)
-    E = (En**p - z / r)**(1/p)
-    a, b, c, d = 4.1e5, 2.88, 22.5, 0.142
-    LET = a * np.exp(-b * E) + c * np.exp(-d * E)
-    LETW = a * np.exp(-b * EW) + c * np.exp(-d * EW)
-    A, B = 0.010, 1.09
+    s=2.2717 
+    q=-0.699 
+    p=1.75
+    z=4 #Air gap that needs to be adjusted for each experiment
+    r=2.08
+    En=10
+    EW = ((En - s * En**q)**p - z / r)**(1/p) #Taking into account the energy loss at the exit window
+    E = (En**p - z / r)**(1/p) #Without taking into account the energy loss at the exit window
+    a=4.1e5 
+    b=2.88 
+    c=22.5 
+    d=0.142
+    LET = (a * np.exp(-b * E)) + (c * np.exp(-d * E))
+    LETW =(a * np.exp(-b * EW)) + (c * np.exp(-d * EW))
+    A=0.010
+    B=1.09
     RE = 1 - A * LET**B
     REW = 1 - A * LETW**B
+
 
     dose_q = [d * RE for d in dose]
     dose_W = [d * REW for d in dose]
@@ -90,6 +130,7 @@ for filename in myFiles:
 
     results.append({
         'picName': filename,
+        'AvDose': dose_av,
         'Corr2AvDose': dose_av_W,
         'Corr2stdDose': std_dose_W
     })
