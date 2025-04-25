@@ -19,29 +19,52 @@ except AttributeError:
 
 class DoseApp:
     def __init__(self, root):
-        self.last_x = None
-        self.last_y = None
-        self.last_avg_dose = None
-        self.last_std_dose = None
         self.root = root
         self.root.title("Dose Analysis Tool")
 
-        self.canvas = tk.Canvas(root, cursor="cross", bg="black", width=800, height=800)
-        self.canvas.pack(side="left", fill="both", expand=True)
+        # Frame principal que contendrá canvas y barra lateral
+        main_frame = tk.Frame(root)
+        main_frame.pack(fill="both", expand=True)
 
-        self.info_frame = tk.Frame(root, width=250)
+        # Frame para el Canvas y Scrollbars (lado izquierdo)
+        self.canvas_frame = tk.Frame(main_frame)
+        self.canvas_frame.pack(side="left", fill="both", expand=True)
+
+        # Canvas para mostrar la imagen
+        self.canvas = tk.Canvas(self.canvas_frame, bg="black", cursor="cross")
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+
+        # Scrollbars
+        self.x_scroll = tk.Scrollbar(self.canvas_frame, orient="horizontal", command=self.canvas.xview)
+        self.x_scroll.grid(row=1, column=0, sticky="ew")
+
+        self.y_scroll = tk.Scrollbar(self.canvas_frame, orient="vertical", command=self.canvas.yview)
+        self.y_scroll.grid(row=0, column=1, sticky="ns")
+
+        self.canvas.configure(xscrollcommand=self.x_scroll.set, yscrollcommand=self.y_scroll.set)
+
+        self.canvas_frame.rowconfigure(0, weight=1)
+        self.canvas_frame.columnconfigure(0, weight=1)
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind_all("<Shift-MouseWheel>", self ._on_mousewheel)
+        self.canvas.bind("<ButtonPress-3>", self.start_drag)
+        self.canvas.bind("<B3-Motion>", self.do_drag)
+
+
+        # Configuración del Canvas para que se expanda con la ventana
+        self.canvas.bind("<Configure>", lambda e: self.canvas.config(scrollregion=self.canvas.bbox("all")))
+        # Frame de información (lado derecho)
+        self.info_frame = tk.Frame(main_frame, width=250)
         self.info_frame.pack(side="right", fill="y", padx=10)
 
-        self.dose_label = tk.Label(self.info_frame, text="Dosis: -", font=("Arial", 14))
-        self.dose_label.pack(pady=10)
-
-        size_frame = tk.Frame(self.info_frame)
-        size_frame.pack(pady=10)
-
-          # Campo para nombre de medición
+        # Información - Nombre de medición
         tk.Label(self.info_frame, text="Nombre medición:").pack(pady=(10, 0))
         self.name_entry = tk.Entry(self.info_frame, width=20)
         self.name_entry.pack(pady=5)
+
+        # Información - Tamaño de selección
+        size_frame = tk.Frame(self.info_frame)
+        size_frame.pack(pady=10)
 
         tk.Label(size_frame, text="Ancho (px):").grid(row=0, column=0, sticky="e", padx=5, pady=2)
         self.width_entry = tk.Entry(size_frame, width=5)
@@ -53,6 +76,7 @@ class DoseApp:
         self.height_entry.grid(row=1, column=1, sticky="w", padx=5, pady=2)
         self.height_entry.insert(0, "50")
 
+        # Botones
         self.update_size_button = tk.Button(self.info_frame, text="Actualizar tamaño", command=self.update_size)
         self.update_size_button.pack(pady=5)
 
@@ -62,12 +86,35 @@ class DoseApp:
         self.save_button = tk.Button(self.info_frame, text="Guardar medición", command=self.save_measurement)
         self.save_button.pack(pady=10)
 
+        # Etiqueta para mostrar Dosis y Desviación Estándar
+        self.dose_label = tk.Label(self.info_frame, text="Dosis: -", font=("Arial", 12))
+        self.dose_label.pack(pady=10)
 
-        self.rect_width = 100
-        self.rect_height = 100
+        # Variables internas
+        self.rect_width = 50
+        self.rect_height = 50
 
         self.pil_img = None
         self.tk_image = None
+
+        # Variables para última medición
+        self.last_x = None
+        self.last_y = None
+        self.last_avg_dose = None
+        self.last_std_dose = None
+
+    def _on_mousewheel(self, event):
+        if event.state & 0x0001:
+            self.canvas.xview_scroll(int(-1*(event.delta/120)), "units")
+        else:
+            self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+    def start_drag(self, event):
+        self.canvas.scan_mark(event.x, event.y)
+
+    def do_drag(self, event):
+        self.canvas.scan_dragto(event.x, event.y, gain=1)
+
 
     def update_size(self):
         try:
@@ -76,6 +123,8 @@ class DoseApp:
             print(f"Nuevo tamaño actualizado: {self.rect_width} x {self.rect_height}")
         except ValueError:
             print("Error: valores inválidos.")
+
+
 
     def load_image(self):
         self.image_path = filedialog.askopenfilename(filetypes=[("TIFF files", "*.tiff")])
@@ -106,6 +155,9 @@ class DoseApp:
         self.canvas_img = self.canvas.create_image(0, 0, anchor="nw", image=self.tk_image)
 
         self.canvas.bind("<Button-1>", self.on_click)
+        self.canvas.bind("<Configure>", self.on_resize)
+        self.canvas.bind("<Leave>", self.on_leave)
+
 
 
     def on_click(self, event):
@@ -114,12 +166,16 @@ class DoseApp:
 
         self.update_size()
 
-        x_center, y_center = event.x, event.y
-        x1 = x_center - self.rect_width // 2
-        y1 = y_center - self.rect_height // 2
-        x2 = x_center + self.rect_width // 2
-        y2 = y_center + self.rect_height // 2
+        # 🛠️ Corregir coordenadas absolutas
+        x_center = self.canvas.canvasx(event.x)
+        y_center = self.canvas.canvasy(event.y)
 
+        x1 = int(x_center - self.rect_width // 2)
+        y1 = int(y_center - self.rect_height // 2)
+        x2 = int(x_center + self.rect_width // 2)
+        y2 = int(y_center + self.rect_height // 2)
+
+        # Asegurar límites
         x1 = max(x1, 0)
         y1 = max(y1, 0)
         x2 = min(x2, self.pil_img.width)
@@ -145,7 +201,7 @@ class DoseApp:
 
             self.dose_label.config(text=f"Dosis: {avg_dose:.4f}\nDesviación: {std_dose:.4f}")
 
-            # Guardar medición temporalmente
+            # Guardar la medición temporal
             self.last_x = x_center
             self.last_y = y_center
             self.last_avg_dose = avg_dose
@@ -156,7 +212,14 @@ class DoseApp:
             print("Error:", e)
 
 
+
     def save_measurement(self):
+        # Si la imagen es muy grande, reducirla
+        max_size = 1000  # o 800 si prefieres más chico
+        if self.pil_img.width > max_size or self.pil_img.height > max_size:
+            self.pil_img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
+
         if self.last_x is None or self.last_y is None:
             print("No hay medición lista para guardar.")
             return
