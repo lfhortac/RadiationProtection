@@ -197,7 +197,7 @@ class DoseApp:
                 blueCali[0] + (blueCali[1] / (np.mean(B) - blueCali[2]))
             ]
             avg_dose = np.mean(dose)
-            std_dose = np.std(dose)
+            std_dose = np.std(dose)/np.sqrt(len(dose))
 
             self.dose_label.config(text=f"Dosis: {avg_dose:.4f}\nDesviación: {std_dose:.4f}")
 
@@ -233,18 +233,14 @@ class DoseApp:
             name = f"Medicion_{self.last_x}_{self.last_y}"
 
         with open(filename, mode="a", newline="") as file:
-            writer = csv.writer(file)
+            writer = csv.writer(file, delimiter='\t')
 
             if not file_exists:
-                writer.writerow(["Imagen", "Nombre_Medicion", "Centro_X", "Centro_Y", "Ancho", "Alto", "Dosis_Promedio", "Desviacion_Estandar"])
+                writer.writerow(["Imagen", "Nombre_Medicion", "Dosis_Promedio", "Desviacion_Estandar"])
 
             writer.writerow([
                 os.path.basename(self.image_path),
                 name,
-                self.last_x,
-                self.last_y,
-                self.rect_width,
-                self.rect_height,
                 f"{self.last_avg_dose:.4f}",
                 f"{self.last_std_dose:.4f}"
             ])
