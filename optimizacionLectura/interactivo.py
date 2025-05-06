@@ -6,6 +6,10 @@ import cv2
 import os
 import csv
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # Importar antes de usar 3D
+import matplotlib.cm as cm
+import customtkinter as ctk
+
 
 # Parámetros de calibración
 pars = np.loadtxt('CalibParameters.txt').reshape(3, 3)
@@ -21,20 +25,81 @@ class DoseApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Dose Analysis Tool")
+        self.detected_circles = []
 
-        # Frame principal que contendrá canvas y barra lateral
-        main_frame = tk.Frame(root)
+        # --- Paleta de colores ---
+        fondo = "#1E1E2F"
+        texto = "#FFFFFF"
+        boton_color = "#3E4A61"
+        boton_activo = "#556178"
+        entrada_fondo = "#2C2F48"
+
+        # --- Frame principal con layout nuevo (controles a la izquierda) ---
+        main_frame = tk.Frame(root, bg=fondo)
         main_frame.pack(fill="both", expand=True)
 
-        # Frame para el Canvas y Scrollbars (lado izquierdo)
-        self.canvas_frame = tk.Frame(main_frame)
-        self.canvas_frame.pack(side="left", fill="both", expand=True)
+        # Frame de controles (ahora a la izquierda)
+        self.info_frame = tk.Frame(main_frame, width=250, bg=fondo)
+        self.info_frame.pack(side="left", fill="y", padx=10, pady=10)
 
-        # Canvas para mostrar la imagen
+        # --- Etiqueta título ---
+        tk.Label(self.info_frame, text="📊 Dose Tool", font=("Segoe UI", 14, "bold"),
+                bg=fondo, fg=texto).pack(pady=(0, 20))
+
+         # Función para crear botones estilizados
+        def styled_button(master, text, command):
+            return tk.Button(master, text=text, command=command,
+                            bg=boton_color, fg=texto, font=("Segoe UI", 10),
+                            relief="flat", bd=0, padx=10, pady=6,
+                            activebackground=boton_activo, activeforeground=texto)
+
+        # Botones funcionales
+        styled_button(self.info_frame, "Cargar Imagen", self.load_image).pack(pady=4, fill="x")
+        styled_button(self.info_frame, "Actualizar tamaño", self.update_size).pack(pady=4, fill="x")
+       
+        styled_button(self.info_frame, "Detectar círculos", self.detectar_circulos_y_calcular_dosis).pack(pady=4, fill="x")
+        styled_button(self.info_frame, "Mapa 3D de dosis", self.generate_dose_map_3d).pack(pady=4, fill="x")
+
+        # Entrada nombre
+        tk.Label(self.info_frame, text="Nombre medición:", bg=fondo, fg=texto).pack()
+        self.name_entry = tk.Entry(self.info_frame, width=20, bg=entrada_fondo, fg=texto, insertbackground=texto)
+        self.name_entry.pack(pady=(0, 15))
+        styled_button(self.info_frame, "Guardar medición", self.save_measurement).pack(pady=4, fill="x")
+        # Tamaño selección
+        size_frame = tk.Frame(self.info_frame, bg=fondo)
+        size_frame.pack(pady=5)
+
+        tk.Label(size_frame, text="Ancho (px):", bg=fondo, fg=texto).grid(row=0, column=0, sticky="e", padx=5)
+        self.width_entry = tk.Entry(size_frame, width=5, bg=entrada_fondo, fg=texto, insertbackground=texto)
+        self.width_entry.grid(row=0, column=1, padx=5)
+        self.width_entry.insert(0, "25")
+
+        tk.Label(size_frame, text="Alto (px):", bg=fondo, fg=texto).grid(row=1, column=0, sticky="e", padx=5)
+        self.height_entry = tk.Entry(size_frame, width=5, bg=entrada_fondo, fg=texto, insertbackground=texto)
+        self.height_entry.grid(row=1, column=1, padx=5)
+        self.height_entry.insert(0, "25")
+
+       
+
+        # Recuadro para mostrar resultados
+        self.result_frame = tk.Frame(self.info_frame, bg="#2C2F48", bd=1, relief="solid")
+        self.result_frame.pack(pady=20, fill="x", padx=5)
+
+        self.dose_label = tk.Label(self.result_frame, text="Dosis: -", font=("Segoe UI", 11),
+                                bg="#2C2F48", fg="white", anchor="w", justify="left")
+        self.dose_label.pack(fill="x", padx=10, pady=(8, 0))
+
+        self.std_label = tk.Label(self.result_frame, text="Desviación estándar: -", font=("Segoe UI", 10),
+                                bg="#2C2F48", fg="white", anchor="w", justify="left")
+        self.std_label.pack(fill="x", padx=10, pady=(0, 8))
+
+        # --- Frame del Canvas (ahora a la derecha) ---
+        self.canvas_frame = tk.Frame(main_frame)
+        self.canvas_frame.pack(side="right", fill="both", expand=True)
+
         self.canvas = tk.Canvas(self.canvas_frame, bg="black", cursor="cross")
         self.canvas.grid(row=0, column=0, sticky="nsew")
 
-        # Scrollbars
         self.x_scroll = tk.Scrollbar(self.canvas_frame, orient="horizontal", command=self.canvas.xview)
         self.x_scroll.grid(row=1, column=0, sticky="ew")
 
@@ -45,63 +110,39 @@ class DoseApp:
 
         self.canvas_frame.rowconfigure(0, weight=1)
         self.canvas_frame.columnconfigure(0, weight=1)
+
+        # Canvas bindings
         self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-        self.canvas.bind_all("<Shift-MouseWheel>", self ._on_mousewheel)
+        self.canvas.bind_all("<Shift-MouseWheel>", self._on_mousewheel)
         self.canvas.bind("<ButtonPress-3>", self.start_drag)
         self.canvas.bind("<B3-Motion>", self.do_drag)
-
-
-        # Configuración del Canvas para que se expanda con la ventana
         self.canvas.bind("<Configure>", lambda e: self.canvas.config(scrollregion=self.canvas.bbox("all")))
-        # Frame de información (lado derecho)
-        self.info_frame = tk.Frame(main_frame, width=250)
-        self.info_frame.pack(side="right", fill="y", padx=10)
 
-        # Información - Nombre de medición
-        tk.Label(self.info_frame, text="Nombre medición:").pack(pady=(10, 0))
-        self.name_entry = tk.Entry(self.info_frame, width=20)
-        self.name_entry.pack(pady=5)
-
-        # Información - Tamaño de selección
-        size_frame = tk.Frame(self.info_frame)
-        size_frame.pack(pady=10)
-
-        tk.Label(size_frame, text="Ancho (px):").grid(row=0, column=0, sticky="e", padx=5, pady=2)
-        self.width_entry = tk.Entry(size_frame, width=5)
-        self.width_entry.grid(row=0, column=1, sticky="w", padx=5, pady=2)
-        self.width_entry.insert(0, "50")
-
-        tk.Label(size_frame, text="Alto (px):").grid(row=1, column=0, sticky="e", padx=5, pady=2)
-        self.height_entry = tk.Entry(size_frame, width=5)
-        self.height_entry.grid(row=1, column=1, sticky="w", padx=5, pady=2)
-        self.height_entry.insert(0, "50")
-
-        # Botones
-        self.update_size_button = tk.Button(self.info_frame, text="Actualizar tamaño", command=self.update_size)
-        self.update_size_button.pack(pady=5)
-
-        self.load_button = tk.Button(self.info_frame, text="Cargar Imagen", command=self.load_image)
-        self.load_button.pack(pady=5)
-
-        self.save_button = tk.Button(self.info_frame, text="Guardar medición", command=self.save_measurement)
-        self.save_button.pack(pady=10)
-
-        # Etiqueta para mostrar Dosis y Desviación Estándar
-        self.dose_label = tk.Label(self.info_frame, text="Dosis: -", font=("Arial", 12))
-        self.dose_label.pack(pady=10)
-
-        # Variables internas
+        # --- Variables internas ---
         self.rect_width = 50
         self.rect_height = 50
-
         self.pil_img = None
         self.tk_image = None
-
-        # Variables para última medición
         self.last_x = None
         self.last_y = None
         self.last_avg_dose = None
         self.last_std_dose = None
+
+    def calcular_dosis_promedio(self, bloque_rgb):
+        """
+        Calcula la dosis promedio usando los canales R, G, B.
+        Ignora ceros (píxeles fuera de la máscara).
+        """
+        R, G, B = bloque_rgb[:, :, 0], bloque_rgb[:, :, 1], bloque_rgb[:, :, 2]
+        try:
+            doses = [
+                redCali[0] + (redCali[1] / (np.mean(R[R > 0]) - redCali[2])),
+                greenCali[0] + (greenCali[1] / (np.mean(G[G > 0]) - greenCali[2])),
+                blueCali[0] + (blueCali[1] / (np.mean(B[B > 0]) - blueCali[2]))
+            ]
+            return np.mean(doses)
+        except:
+            return 0    
 
     def _on_mousewheel(self, event):
         if event.state & 0x0001:
@@ -199,7 +240,8 @@ class DoseApp:
             avg_dose = np.mean(dose)
             std_dose = np.std(dose)/np.sqrt(len(dose))
 
-            self.dose_label.config(text=f"Dosis: {avg_dose:.4f}\nDesviación: {std_dose:.4f}")
+            self.dose_label.config(text=f"Dosis: {avg_dose:.4f} Gy")
+            self.std_label.config(text=f"Desviación estándar: {std_dose:.4f} Gy")
 
             # Guardar la medición temporal
             self.last_x = x_center
@@ -256,7 +298,226 @@ class DoseApp:
 
         print(f"Medición '{name}' guardada exitosamente.")
 
-   
+    def generate_dose_map_3d(self):
+        if self.pil_img is None:
+            print("No hay imagen cargada.")
+            return
+
+        # Convertir imagen a array
+        img_array = np.array(self.pil_img)
+
+        # Definir resolución del grid (más alto = menos detalle, más rápido)
+        step = 10  # píxeles por bloque
+        h, w, _ = img_array.shape
+        dose_map = []
+
+        for y in range(0, h, step):
+            row = []
+            for x in range(0, w, step):
+                block = img_array[y:y+step, x:x+step]
+                if block.size == 0:
+                    row.append(0)
+                    continue
+                avg_dose = self.calcular_dosis_promedio(block)
+                row.append(avg_dose)
+                dose_map.append(row)
+
+        dose_map = np.array(dose_map)
+
+        # Crear malla de coordenadas
+        X = np.arange(0, dose_map.shape[1])
+        Y = np.arange(0, dose_map.shape[0])
+        X, Y = np.meshgrid(X, Y)
+
+        fig = plt.figure(figsize=(10, 7))
+        ax = fig.add_subplot(111, projection='3d')
+        surf = ax.plot_surface(X, Y, dose_map, cmap=cm.viridis)
+        fig.colorbar(surf, shrink=0.5, aspect=5, label='Dosis estimada (Gy)')
+        ax.set_title("Mapa 3D de dosis")
+        ax.set_xlabel("X (bloques)")
+        ax.set_ylabel("Y (bloques)")
+        ax.set_zlabel("Dosis (Gy)")
+        plt.tight_layout()
+        plt.show()    
+
+    def detectar_circulos_y_calcular_dosis(self):
+        if self.pil_img is None:
+            print("⚠️ No hay imagen cargada.")
+            return
+
+        img_rgb = np.array(self.pil_img)
+        img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
+        img_blur = cv2.medianBlur(img_gray, 5)
+
+        # Detectar círculos con Hough
+        circles = cv2.HoughCircles(
+            img_blur,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=30,
+            param1=50,
+            param2=30,
+            minRadius=10,
+            maxRadius=100
+        )
+
+        if circles is None:
+            print("⚠️ No se detectaron círculos.")
+            return
+
+        circles = np.uint16(np.around(circles[0]))
+        print(f"🔍 Se detectaron {len(circles)} círculos.")
+
+        self.detected_circles = []  # Limpia anteriores
+        resultados = []
+
+        for idx, (x, y, r) in enumerate(circles):
+            resultado = self.procesar_circulo(img_rgb, x, y, r)
+            x, y, r_seguro = resultado["x"], resultado["y"], resultado["r"]
+            print(f"⭕ Círculo {idx+1}: Dosis = {resultado['mean_dose']:.3f} Gy")
+
+            resultados.append(resultado)
+            self.detected_circles.append((x, y, r_seguro))  # para clic derecho
+
+            # Dibujar el círculo detectado correctamente
+            self.canvas.create_oval(
+                x - r_seguro, y - r_seguro, x + r_seguro, y + r_seguro,
+                outline='green', width=2, tags="circle_detect"
+    )
+
+
+        # Dibujar todos los círculos
+        for resultado in resultados:
+            x, y, r = resultado["x"], resultado["y"], resultado["r"]
+            self.canvas.create_oval(
+                x - r, y - r, x + r, y + r,
+                outline='green', width=2, tags="circle_detect"
+            )
+
+        # Activar clic derecho sobre círculo
+        self.canvas.bind("<Button-3>", self.on_circle_click)
+
+        print("✅ Análisis de círculos completado.")
+    
+
+    def mapa_3d_circulo(self, x, y, r):
+        if self.pil_img is None:
+            print("⚠️ No hay imagen cargada.")
+            return
+
+        img_rgb = np.array(self.pil_img)
+        self.procesar_circulo(img_rgb, x, y, r, graficar=True)  
+
+
+    def on_circle_click(self, event):
+        if not self.detected_circles or self.pil_img is None:
+            return
+
+        x_click = self.canvas.canvasx(event.x)
+        y_click = self.canvas.canvasy(event.y)
+
+        img_rgb = np.array(self.pil_img)
+
+        for (x, y, r) in self.detected_circles:
+            dist = np.sqrt((x - x_click)**2 + (y - y_click)**2)
+            if dist < r:
+                print(f"🖱️ Clic derecho sobre círculo en ({x}, {y}) → mostrando mapa 3D")
+                self.procesar_circulo(img_rgb, x, y, r, graficar=True)
+                return
+
+    def procesar_circulo(self, img_rgb, x, y, r, step=5, factor_radio=0.7, graficar=False):
+        h, w, _ = img_rgb.shape
+        radio_seguro = int(r * factor_radio)
+
+        # Máscara circular
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(mask, (x, y), radio_seguro, 255, -1)
+        masked_img = cv2.bitwise_and(img_rgb, img_rgb, mask=mask)
+
+        # Recorte
+        x1 = max(0, x - radio_seguro)
+        y1 = max(0, y - radio_seguro)
+        x2 = min(w, x + radio_seguro)
+        y2 = min(h, y + radio_seguro)
+        cut = masked_img[y1:y2, x1:x2]
+
+        # Dosis promedio exacta (por píxeles)
+        #mean_dose_exact = self.calcular_dosis_promedio(cut)
+
+        # Mapa por bloques
+        dose_map = []
+        for j in range(0, cut.shape[0], step):
+            row = []
+            for i in range(0, cut.shape[1], step):
+                block = cut[j:j+step, i:i+step]
+                if block.size == 0:
+                    row.append(0)
+                    continue
+                row.append(self.calcular_dosis_promedio(block))
+            dose_map.append(row)
+
+        dose_map = np.array(dose_map)
+
+        # Estadísticas de homogeneidad
+        valores_validos = dose_map[dose_map > 0]
+        mean_dose = np.mean(valores_validos)
+        std_dose = np.std(valores_validos)
+        min_dose = np.min(valores_validos)
+        max_dose = np.max(valores_validos)
+
+        homogeneity_std = 100 * (1 - (std_dose / mean_dose))
+        homogeneity_range = 100 * (1 - ((max_dose - min_dose) / mean_dose))
+
+        if graficar:
+            from mpl_toolkits.mplot3d import Axes3D
+            import matplotlib.cm as cm
+
+            X = np.arange(dose_map.shape[1])
+            Y = np.arange(dose_map.shape[0])
+            X, Y = np.meshgrid(X, Y)
+
+            fig = plt.figure(figsize=(10, 7))
+            ax = fig.add_subplot(111, projection='3d')
+            surf = ax.plot_surface(X, Y, dose_map, cmap=cm.viridis)
+            # Posición personalizada: [izquierda, abajo, ancho, alto]
+            cbar_ax = fig.add_axes([0.87, 0.25, 0.02, 0.5])  # mueve la barra más a la derecha
+            fig.colorbar(surf, cax=cbar_ax, label='Dosis (Gy)')
+            ax.set_title("Mapa 3D de dosis en círculo")
+            ax.set_xlabel("X (bloques)")
+            ax.set_ylabel("Y (bloques)")
+            ax.set_zlabel("Dosis (Gy)")
+
+            info_text = (
+                f"Promedio: {mean_dose:.3f} Gy\n"
+                f"Desviación estándar: {std_dose:.3f} Gy\n"
+                f"Homo. σ/μ: {homogeneity_std:.1f}%\n"
+                f"Homo. rango: {homogeneity_range:.1f}%"
+            )
+
+            # Ajustar layout del gráfico para dejar espacio
+            plt.subplots_adjust(right=0.8, bottom=0.2)
+
+            # Mostrar texto en una posición fija debajo de la colorbar
+            fig.text(0.1, 0.05, info_text,
+                ha='left', va='bottom',
+                fontsize=10,
+                bbox=dict(facecolor='white', edgecolor='gray', alpha=0.85, boxstyle='round,pad=0.5'))
+            plt.show()    
+
+           
+
+        return {
+            "x": x,
+            "y": y,
+            "r": radio_seguro,
+            "mean_dose": mean_dose,
+            "std": std_dose,
+            "min": min_dose,
+            "max": max_dose,
+            "homo_std": homogeneity_std,
+            "homo_range": homogeneity_range
+        }
+
         
 
 
