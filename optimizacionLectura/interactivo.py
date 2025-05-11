@@ -55,10 +55,51 @@ class DoseApp:
 
         # Botones funcionales
         styled_button(self.info_frame, "Cargar Imagen", self.load_image).pack(pady=4, fill="x")
-        styled_button(self.info_frame, "Actualizar tamaño", self.update_size).pack(pady=4, fill="x")
-       
+        styled_button(self.info_frame, "Detect Radiocromicas", self.detectar_areas_radiocromicas).pack(pady=4, fill="x")
         styled_button(self.info_frame, "Detectar círculos", self.detectar_circulos_y_calcular_dosis).pack(pady=4, fill="x")
         styled_button(self.info_frame, "Mapa 3D de dosis", self.generate_dose_map_3d).pack(pady=4, fill="x")
+
+
+        # Selector de forma (círculo o rectángulo)
+        shape_frame = tk.Frame(self.info_frame, bg=fondo)
+        shape_frame.pack(pady=5, fill="x")
+        
+        tk.Label(shape_frame, text="Seleccionar forma:", bg=fondo, fg=texto).pack(anchor="w")
+        
+        self.shape_var = tk.StringVar(value="circle")
+        
+        shape_options = tk.Frame(shape_frame, bg=fondo)
+        shape_options.pack(fill="x", pady=2)
+        
+        circle_rb = tk.Radiobutton(shape_options, text="Círculo", variable=self.shape_var, 
+                                  value="circle", command=self.on_shape_change,
+                                  bg=fondo, fg=texto, selectcolor=boton_color, 
+                                  activebackground=fondo, activeforeground=texto)
+        circle_rb.pack(side="left", padx=(0, 10))
+        
+        rect_rb = tk.Radiobutton(shape_options, text="Rectángulo", variable=self.shape_var, 
+                                value="rectangle", command=self.on_shape_change,
+                                bg=fondo, fg=texto, selectcolor=boton_color, 
+                                activebackground=fondo, activeforeground=texto)
+        rect_rb.pack(side="left")
+        
+        # Frame para dimensiones
+        self.dimensions_frame = tk.Frame(self.info_frame, bg=fondo)
+        self.dimensions_frame.pack(pady=5, fill="x")
+        
+        # Inicialmente mostramos el control de radio para círculo
+        self.circle_controls = tk.Frame(self.dimensions_frame, bg=fondo)
+        self.circle_controls.pack(fill="x")
+        
+        tk.Label(self.circle_controls, text="Radio (px):", bg=fondo, fg=texto).pack(side="left", padx=5)
+        self.radius_entry = tk.Entry(self.circle_controls, width=5, bg=entrada_fondo, fg=texto, insertbackground=texto)
+        self.radius_entry.pack(side="left", padx=5)
+        self.radius_entry.insert(0, "25")
+
+
+
+
+
 
         # Entrada nombre
         tk.Label(self.info_frame, text="Nombre medición:", bg=fondo, fg=texto).pack()
@@ -127,12 +168,11 @@ class DoseApp:
         self.last_y = None
         self.last_avg_dose = None
         self.last_std_dose = None
+        self.next_area_id = 1  # Para generar IDs únicos para radiocromicas
+        self.radiochromic_dosis = []  # Lista para almacenar dosis radiocromicas detectadas
+
 
     def calcular_dosis_promedio(self, bloque_rgb):
-        """
-        Calcula la dosis promedio usando los canales R, G, B.
-        Ignora ceros (píxeles fuera de la máscara).
-        """
         R, G, B = bloque_rgb[:, :, 0], bloque_rgb[:, :, 1], bloque_rgb[:, :, 2]
         try:
             doses = [
@@ -198,7 +238,172 @@ class DoseApp:
         self.canvas.bind("<Button-1>", self.on_click)
         self.canvas.bind("<Configure>", self.on_resize)
         self.canvas.bind("<Leave>", self.on_leave)
+        # Limpiar estadísticas
+        self.update_statistics_display()
 
+    def update_statistics_display(self):
+        """Actualiza el panel de estadísticas con los datos de todas las áreas"""
+        self.stats_text.config(state="normal")
+        self.stats_text.delete(1.0, tk.END)
+        
+        if not self.radiochromic_areas:
+            self.stats_text.insert(tk.END, "No hay áreas radiocromicas definidas.")
+            self.stats_text.config(state="disabled")
+            return
+            
+        for area in self.radiochromic_areas:
+            # Encabezado del área
+            self.stats_text.insert(tk.END, f"=== {area['name']} ===\n", "header")
+            
+            if not area["circles"]:
+                self.stats_text.insert(tk.END, "  No hay círculos en esta área.\n\n")
+                continue
+                
+            # Estadísticas generales del área
+            doses = [circle["dose"] for circle in area["circles"]]
+            mean_dose = np.mean(doses)
+            std_dose = np.std(doses, ddof=1) if len(doses) > 1 else 0
+            
+            self.stats_text.insert(tk.END, f"  Círculos: {len(area['circles'])}\n")
+            self.stats_text.insert(tk.END, f"  Dosis promedio: {mean_dose:.4f} Gy\n")
+            self.stats_text.insert(tk.END, f"  Desviación: {std_dose:.4f} Gy\n\n")
+            
+            # Detalles de cada círculo
+            self.stats_text.insert(tk.END, "  Círculos individuales:\n")
+            for i, circle in enumerate(area["circles"]):
+                self.stats_text.insert(tk.END, f"  {i+1}. Dosis: {circle['dose']:.4f} Gy, ")
+                self.stats_text.insert(tk.END, f"σ: {circle['std']:.4f} Gy\n")
+                
+            self.stats_text.insert(tk.END, "\n")
+            
+        self.stats_text.config(state="disabled")
+        
+        # Configurar etiquetas para el texto
+        self.stats_text.tag_configure("header", font=("Segoe UI", 10, "bold"))    
+
+    def detectar_areas_radiocromicas(self):
+        if self.pil_img is None:
+            print("⚠️ No hay imagen cargada.")
+            return
+            
+        img_rgb = np.array(self.pil_img)
+        img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
+        
+        # Aplicar umbral para detectar áreas oscuras (radiocromicas)
+        _, thresh = cv2.threshold(img_gray, 180, 255, cv2.THRESH_BINARY_INV)
+        
+        # Encontrar contornos
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Filtrar contornos pequeños
+        min_area = 5000  # Ajustar según el tamaño de las áreas radiocromicas
+        valid_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
+        
+        if not valid_contours:
+            print("⚠️ No se detectaron áreas radiocromicas.")
+            return
+            
+        print(f"🔍 Se detectaron {len(valid_contours)} áreas radiocromicas.")
+        
+        # Limpiar áreas anteriores
+        self.canvas.delete("radiochromic")
+        self.radiochromic_areas = []
+        
+        # Procesar cada área
+        for idx, contour in enumerate(valid_contours):
+            # Obtener rectángulo que encierra el contorno
+            x, y, w, h = cv2.boundingRect(contour)
+            
+            # Nombre por defecto
+            area_name = f"Area_{idx+1}"
+            
+            # Crear área radiocromica
+            area = {
+                "name": area_name,
+                "coords": (x, y, x+w, y+h),
+                "circles": []  # Lista para almacenar círculos dentro del área
+            }
+            
+            self.radiochromic_areas.append(area)
+            
+            # Dibujar rectángulo
+            self.canvas.create_rectangle(
+                x, y, x+w, y+h,
+                outline='blue', width=2, tags="radiochromic"
+            )
+            
+            # Añadir etiqueta con nombre
+            self.canvas.create_text(
+                x+5, y+5,
+                text=area_name,
+                anchor="nw",
+                fill="white",
+                tags="radiochromic"
+            )
+            
+        # Mostrar diálogo para nombrar áreas
+        self.mostrar_dialogo_nombres()
+        
+        print("✅ Detección de áreas radiocromicas completada.")
+
+    def mostrar_dialogo_nombres(self):
+        """Muestra un diálogo para nombrar las áreas radiocromicas"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Nombrar áreas radiocromicas")
+        dialog.geometry("400x300")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Frame para la lista de áreas
+        frame = tk.Frame(dialog)
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        tk.Label(frame, text="Asignar nombres a las áreas:").pack(anchor="w")
+        
+        # Crear entradas para cada área
+        entries = []
+        for i, area in enumerate(self.radiochromic_areas):
+            area_frame = tk.Frame(frame)
+            area_frame.pack(fill="x", pady=5)
+            
+            tk.Label(area_frame, text=f"Área {i+1}:").pack(side="left")
+            entry = tk.Entry(area_frame, width=30)
+            entry.pack(side="left", padx=5)
+            entry.insert(0, area["name"])
+            entries.append((area, entry))
+        
+        # Botón para guardar
+        def guardar_nombres():
+            for area, entry in entries:
+                nombre = entry.get().strip()
+                if nombre:
+                    area["name"] = nombre
+                    
+                    # Actualizar etiqueta en el canvas
+                    x, y, _, _ = area["coords"]
+                    for item in self.canvas.find_withtag("radiochromic"):
+                        if self.canvas.type(item) == "text":
+                            coords = self.canvas.coords(item)
+                            if abs(coords[0] - x - 5) < 10 and abs(coords[1] - y - 5) < 10:
+                                self.canvas.itemconfig(item, text=nombre)
+                                break
+            
+            dialog.destroy()
+        
+        tk.Button(dialog, text="Guardar", command=guardar_nombres).pack(pady=10)
+
+
+    def on_shape_change(self):
+        """Maneja el cambio entre círculo y rectángulo"""
+        self.current_shape = self.shape_var.get()
+        
+        # Ocultar y mostrar los controles apropiados
+        if self.current_shape == "circle":
+            self.rect_controls.pack_forget()
+            self.circle_controls.pack(fill="x")
+        else:
+            self.circle_controls.pack_forget()
+            self.rect_controls.pack(fill="x")    
 
 
     def on_click(self, event):
@@ -238,7 +443,7 @@ class DoseApp:
                 blueCali[0] + (blueCali[1] / (np.mean(B) - blueCali[2]))
             ]
             avg_dose = np.mean(dose)
-            std_dose = np.std(dose)/np.sqrt(len(dose))
+            std_dose = np.std(dose,ddof=1)#/np.sqrt(len(dose))
 
             self.dose_label.config(text=f"Dosis: {avg_dose:.4f} Gy")
             self.std_label.config(text=f"Desviación estándar: {std_dose:.4f} Gy")
@@ -307,7 +512,7 @@ class DoseApp:
         img_array = np.array(self.pil_img)
 
         # Definir resolución del grid (más alto = menos detalle, más rápido)
-        step = 10  # píxeles por bloque
+        step = 5  # píxeles por bloque
         h, w, _ = img_array.shape
         dose_map = []
 
@@ -329,8 +534,15 @@ class DoseApp:
         Y = np.arange(0, dose_map.shape[0])
         X, Y = np.meshgrid(X, Y)
 
+        valores_validos = dose_map[dose_map > 0]
+        mean_dose = np.mean(valores_validos)
+        std_dose = np.std(valores_validos, ddof=1)
+       
         fig = plt.figure(figsize=(10, 7))
         ax = fig.add_subplot(111, projection='3d')
+        zmin = mean_dose - 4 * std_dose
+        zmax = mean_dose + 4 * std_dose
+        ax.set_zlim(zmin, zmax)
         surf = ax.plot_surface(X, Y, dose_map, cmap=cm.viridis)
         fig.colorbar(surf, shrink=0.5, aspect=5, label='Dosis estimada (Gy)')
         ax.set_title("Mapa 3D de dosis")
@@ -425,7 +637,7 @@ class DoseApp:
                 self.procesar_circulo(img_rgb, x, y, r, graficar=True)
                 return
 
-    def procesar_circulo(self, img_rgb, x, y, r, step=5, factor_radio=0.7, graficar=False):
+    def procesar_circulo(self, img_rgb, x, y, r, step=1, factor_radio=0.9, graficar=False):
         h, w, _ = img_rgb.shape
         radio_seguro = int(r * factor_radio)
 
@@ -461,7 +673,7 @@ class DoseApp:
         # Estadísticas de homogeneidad
         valores_validos = dose_map[dose_map > 0]
         mean_dose = np.mean(valores_validos)
-        std_dose = np.std(valores_validos)
+        std_dose = np.std(valores_validos, ddof=1)#/np.sqrt(len(valores_validos))
         min_dose = np.min(valores_validos)
         max_dose = np.max(valores_validos)
 
@@ -476,11 +688,17 @@ class DoseApp:
             Y = np.arange(dose_map.shape[0])
             X, Y = np.meshgrid(X, Y)
 
+            
+
             fig = plt.figure(figsize=(10, 7))
             ax = fig.add_subplot(111, projection='3d')
             surf = ax.plot_surface(X, Y, dose_map, cmap=cm.viridis)
+            zmin = mean_dose - 10 * std_dose
+            zmax = mean_dose + 10 * std_dose
+            ax.set_zlim(zmin, zmax)
             # Posición personalizada: [izquierda, abajo, ancho, alto]
             cbar_ax = fig.add_axes([0.87, 0.25, 0.02, 0.5])  # mueve la barra más a la derecha
+           
             fig.colorbar(surf, cax=cbar_ax, label='Dosis (Gy)')
             ax.set_title("Mapa 3D de dosis en círculo")
             ax.set_xlabel("X (bloques)")
